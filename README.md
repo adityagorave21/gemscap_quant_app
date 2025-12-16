@@ -219,7 +219,7 @@ Watch the 2-minute demonstration: [Video Link]
 ## 👤 Author
 
 **Aditya Gorave**  
-📧 Email: adityagorave21@gmail.com  
+📧 Email: adityagorave2670@gmail.com  
 🎓 VIT Pune - Class of 2026  
 💼 GitHub: [@adityagorave21](https://github.com/adityagorave21)
 
