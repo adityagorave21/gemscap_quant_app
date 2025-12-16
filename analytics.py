@@ -1,79 +1,249 @@
-﻿"""Quantitative analytics module."""
-import pandas as pd
 import numpy as np
-from statsmodels.tsa.stattools import adfuller
-from statsmodels.api import OLS, add_constant
+import pandas as pd
+try:
+    from statsmodels.tsa.stattools import adfuller
+    import statsmodels.api as sm
+    STATSMODELS_AVAILABLE = True
+except ImportError:
+    STATSMODELS_AVAILABLE = False
+    print("Warning: statsmodels not installed. ADF test will not be available.")
+    print("Install it using: pip install statsmodels")
+
 
 class QuantAnalytics:
-    @staticmethod
-    def resample_ticks(df, timeframe):
-        if df.empty:
-            return pd.DataFrame()
-        df = df.copy().set_index('timestamp')
-        ohlc = df['price'].resample(timeframe).ohlc()
-        volume = df['quantity'].resample(timeframe).sum()
-        result = ohlc.copy()
-        result['volume'] = volume
-        return result.dropna()
+    """Quantitative Analytics for Pairs Trading"""
     
-    @staticmethod
-    def calculate_ols_hedge_ratio(price_a, price_b):
-        if len(price_a) < 2 or len(price_b) < 2:
-            return 0.0, 0.0, 0.0
-        df = pd.DataFrame({'a': price_a, 'b': price_b}).dropna()
-        if len(df) < 2:
-            return 0.0, 0.0, 0.0
-        X = add_constant(df['b'])
-        model = OLS(df['a'], X).fit()
-        return model.params[1], model.params[0], model.rsquared
+    def __init__(self):
+        """Initialize analytics engine"""
+        if not STATSMODELS_AVAILABLE:
+            print("⚠️ Warning: statsmodels is not installed!")
+            print("Some features (ADF test, OLS regression) will not work.")
+            print("Install with: pip install statsmodels")
     
-    @staticmethod
-    def calculate_spread(price_a, price_b, hedge_ratio):
-        df = pd.DataFrame({'a': price_a, 'b': price_b}).dropna()
-        if df.empty:
-            return pd.Series()
-        return df['a'] - hedge_ratio * df['b']
-    
-    @staticmethod
-    def calculate_zscore(series, window=20):
-        if len(series) < window:
-            return pd.Series(index=series.index, dtype=float)
-        rolling_mean = series.rolling(window=window).mean()
-        rolling_std = series.rolling(window=window).std()
-        return (series - rolling_mean) / rolling_std
-    
-    @staticmethod
-    def calculate_rolling_correlation(price_a, price_b, window=20):
-        df = pd.DataFrame({'a': price_a, 'b': price_b}).dropna()
-        if len(df) < window:
-            return pd.Series(index=df.index, dtype=float)
-        return df['a'].rolling(window=window).corr(df['b'])
-    
-    @staticmethod
-    def adf_test(series):
-        if len(series) < 10:
-            return {'adf_statistic': np.nan, 'p_value': np.nan, 'critical_1%': np.nan,
-                    'critical_5%': np.nan, 'critical_10%': np.nan, 'is_stationary': False}
-        series_clean = series.dropna()
-        if len(series_clean) < 10:
-            return {'adf_statistic': np.nan, 'p_value': np.nan, 'critical_1%': np.nan,
-                    'critical_5%': np.nan, 'critical_10%': np.nan, 'is_stationary': False}
+    def resample_ticks(self, df, timeframe):
+        """
+        Resample tick data to OHLC format
+        
+        Args:
+            df: DataFrame with columns ['timestamp', 'price', 'quantity']
+            timeframe: String like '1s', '1min', '5min'
+        
+        Returns:
+            DataFrame with OHLC data
+        """
         try:
-            result = adfuller(series_clean, autolag='AIC')
-            return {'adf_statistic': result[0], 'p_value': result[1],
-                    'critical_1%': result[4]['1%'], 'critical_5%': result[4]['5%'],
-                    'critical_10%': result[4]['10%'], 'is_stationary': result[1] < 0.05}
-        except:
-            return {'adf_statistic': np.nan, 'p_value': np.nan, 'critical_1%': np.nan,
-                    'critical_5%': np.nan, 'critical_10%': np.nan, 'is_stationary': False}
+            df = df.copy()
+            
+            # Ensure timestamp is datetime
+            if not pd.api.types.is_datetime64_any_dtype(df['timestamp']):
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+            
+            df = df.set_index("timestamp")
+            
+            # Create OHLC
+            ohlc = df["price"].resample(timeframe).ohlc()
+            volume = df["quantity"].resample(timeframe).sum()
+            
+            ohlc["volume"] = volume
+            
+            # Drop rows with NaN values
+            return ohlc.dropna()
+        
+        except Exception as e:
+            print(f"Error in resample_ticks: {str(e)}")
+            return pd.DataFrame()
     
-    @staticmethod
-    def calculate_summary_stats(prices):
-        if prices.empty:
-            return {}
-        returns = prices.pct_change()
-        return {'count': len(prices), 'mean': prices.mean(), 'std': prices.std(),
-                'min': prices.min(), 'max': prices.max(),
-                'last': prices.iloc[-1] if len(prices) > 0 else np.nan,
-                'returns_mean': returns.mean() if len(returns) > 1 else np.nan,
-                'returns_std': returns.std() if len(returns) > 1 else np.nan}
+    def calculate_ols_hedge_ratio(self, price_a, price_b):
+        """
+        Calculate hedge ratio using OLS regression
+        
+        Args:
+            price_a: Series of prices for asset A
+            price_b: Series of prices for asset B
+        
+        Returns:
+            tuple: (hedge_ratio, intercept, r_squared)
+        """
+        if not STATSMODELS_AVAILABLE:
+            raise ImportError("statsmodels is required for OLS regression. Install with: pip install statsmodels")
+        
+        try:
+            # Align the two price series
+            price_a, price_b = price_a.align(price_b, join="inner")
+            
+            # Remove any NaN values
+            valid_idx = ~(price_a.isna() | price_b.isna())
+            price_a = price_a[valid_idx]
+            price_b = price_b[valid_idx]
+            
+            if len(price_a) < 2:
+                return 1.0, 0.0, 0.0
+            
+            # Prepare data for OLS
+            X = sm.add_constant(price_b.values)
+            
+            # Fit OLS model
+            model = sm.OLS(price_a.values, X).fit()
+            
+            # Return hedge ratio (beta), intercept (alpha), and R-squared
+            return model.params[1], model.params[0], model.rsquared
+        
+        except Exception as e:
+            print(f"Error in calculate_ols_hedge_ratio: {str(e)}")
+            return 1.0, 0.0, 0.0
+    
+    def calculate_spread(self, price_a, price_b, hedge_ratio):
+        """
+        Calculate the spread between two price series
+        
+        Args:
+            price_a: Series of prices for asset A
+            price_b: Series of prices for asset B
+            hedge_ratio: The hedge ratio (beta)
+        
+        Returns:
+            Series: The spread (price_a - hedge_ratio * price_b)
+        """
+        try:
+            # Align the two price series
+            price_a, price_b = price_a.align(price_b, join="inner")
+            
+            # Calculate spread
+            spread = (price_a - hedge_ratio * price_b).dropna()
+            
+            return spread
+        
+        except Exception as e:
+            print(f"Error in calculate_spread: {str(e)}")
+            return pd.Series()
+    
+    def calculate_zscore(self, series, window=20):
+        """
+        Calculate rolling z-score
+        
+        Args:
+            series: Price series
+            window: Rolling window size
+        
+        Returns:
+            Series: Z-score values
+        """
+        try:
+            # Calculate rolling mean and std
+            rolling_mean = series.rolling(window=window).mean()
+            rolling_std = series.rolling(window=window).std()
+            
+            # Avoid division by zero
+            rolling_std = rolling_std.replace(0, np.nan)
+            
+            # Calculate z-score
+            zscore = ((series - rolling_mean) / rolling_std).dropna()
+            
+            return zscore
+        
+        except Exception as e:
+            print(f"Error in calculate_zscore: {str(e)}")
+            return pd.Series()
+    
+    def calculate_rolling_correlation(self, a, b, window=20):
+        """
+        Calculate rolling correlation between two series
+        
+        Args:
+            a: First price series
+            b: Second price series
+            window: Rolling window size
+        
+        Returns:
+            Series: Rolling correlation values
+        """
+        try:
+            correlation = a.rolling(window=window).corr(b).dropna()
+            return correlation
+        
+        except Exception as e:
+            print(f"Error in calculate_rolling_correlation: {str(e)}")
+            return pd.Series()
+    
+    def calculate_summary_stats(self, series):
+        """
+        Calculate summary statistics for a series
+        
+        Args:
+            series: Price series
+        
+        Returns:
+            dict: Summary statistics
+        """
+        try:
+            return {
+                "mean": float(series.mean()),
+                "std": float(series.std()),
+                "min": float(series.min()),
+                "max": float(series.max()),
+                "skew": float(series.skew()),
+                "kurtosis": float(series.kurtosis()),
+                "count": int(len(series))
+            }
+        
+        except Exception as e:
+            print(f"Error in calculate_summary_stats: {str(e)}")
+            return {
+                "mean": 0.0,
+                "std": 0.0,
+                "min": 0.0,
+                "max": 0.0,
+                "skew": 0.0,
+                "kurtosis": 0.0,
+                "count": 0
+            }
+    
+    def adf_test(self, series):
+        """
+        Perform Augmented Dickey-Fuller test for stationarity
+        
+        Args:
+            series: Time series data
+        
+        Returns:
+            dict: ADF test results
+        """
+        if not STATSMODELS_AVAILABLE:
+            raise ImportError(
+                "statsmodels is required for ADF test.\n"
+                "Install it using: pip install statsmodels"
+            )
+        
+        try:
+            # Remove NaN values
+            series = series.dropna()
+            
+            # Check minimum data points
+            if len(series) < 50:
+                raise ValueError(f"ADF test requires at least 50 data points. Got {len(series)}.")
+            
+            # Perform ADF test
+            result = adfuller(series, autolag="AIC")
+            
+            # Extract results
+            adf_stat = result[0]
+            p_value = result[1]
+            critical_values = result[4]
+            
+            return {
+                "adf_statistic": float(adf_stat),
+                "p_value": float(p_value),
+                "critical_1%": float(critical_values["1%"]),
+                "critical_5%": float(critical_values["5%"]),
+                "critical_10%": float(critical_values["10%"]),
+                "is_stationary": p_value < 0.05,
+                "n_observations": len(series),
+                "interpretation": "Stationary (reject null hypothesis)" if p_value < 0.05 else "Non-stationary (fail to reject null hypothesis)"
+            }
+        
+        except ImportError as e:
+            raise ImportError(str(e))
+        
+        except Exception as e:
+            print(f"Error in adf_test: {str(e)}")
+            raise
