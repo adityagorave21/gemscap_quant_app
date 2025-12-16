@@ -275,8 +275,4 @@ Potential extensions for production deployment:
 - Portfolio optimization and risk management
 - Real-time P&L tracking and reporting
 
--
 
-**⭐ If this project helped you, please star the repository!**
-
-*Built with passion for quantitative finance and algorithmic trading* 📈
